@@ -2,38 +2,44 @@ package bk
 
 import (
 	"blion-worker-consenso/internal/models"
-	"blion-worker-consenso/pkg/bk/lottery_table"
-	"blion-worker-consenso/pkg/bk/participants_table"
-	"blion-worker-consenso/pkg/bk/reward_table"
-	"blion-worker-consenso/pkg/bk/validation_table"
+	"blion-worker-consenso/pkg/bk/lotteries"
+	"blion-worker-consenso/pkg/bk/miner_response"
+	"blion-worker-consenso/pkg/bk/participants"
+	"blion-worker-consenso/pkg/bk/rewards"
+	"blion-worker-consenso/pkg/bk/validator_votes"
 	"github.com/jmoiron/sqlx"
 )
 
 type Server struct {
-	SrvLottery      lottery_table.PortsServerLotteryTable
-	SrvParticipants participants_table.PortsServerParticipantsTable
-	SrvReward       reward_table.PortsServerRewardTable
-	SrvValidation   validation_table.PortsServerValidationTable
+	SrvLottery        lotteries.PortsServerLottery
+	SrvParticipants   participants.PortsServerParticipants
+	SrvReward         rewards.PortsServerRewards
+	SrvValidatorsVote validator_votes.PortsServerValidatorVotes
+	SrvMinerResponse  miner_response.PortsServerMinerResponse
 }
 
 func NewServerBk(db *sqlx.DB, user *models.User, txID string) *Server {
 
-	repoLottery := lottery_table.FactoryStorage(db, user, txID)
-	srvLottery := lottery_table.NewLotteryTableService(repoLottery, user, txID)
+	repoLottery := lotteries.FactoryStorage(db, user, txID)
+	srvLottery := lotteries.NewLotteryService(repoLottery, user, txID)
 
-	repoParticipants := participants_table.FactoryStorage(db, user, txID)
-	srvParticipants := participants_table.NewParticipantsTableService(repoParticipants, user, txID)
+	repoParticipants := participants.FactoryStorage(db, user, txID)
+	srvParticipants := participants.NewParticipantsService(repoParticipants, user, txID)
 
-	repoReward := reward_table.FactoryStorage(db, user, txID)
-	srvReward := reward_table.NewRewardTableService(repoReward, user, txID)
+	repoReward := rewards.FactoryStorage(db, user, txID)
+	srvReward := rewards.NewRewardsService(repoReward, user, txID)
 
-	repoValidation := validation_table.FactoryStorage(db, user, txID)
-	srvValidation := validation_table.NewValidationTableService(repoValidation, user, txID)
+	repoValidatorsVote := validator_votes.FactoryStorage(db, user, txID)
+	srvValidatorsVote := validator_votes.NewValidatorVotesService(repoValidatorsVote, user, txID)
+
+	repoMinerResponse := miner_response.FactoryStorage(db, user, txID)
+	srvMinerResponse := miner_response.NewMinerResponseService(repoMinerResponse, user, txID)
 
 	return &Server{
-		SrvLottery:      srvLottery,
-		SrvParticipants: srvParticipants,
-		SrvReward:       srvReward,
-		SrvValidation:   srvValidation,
+		SrvLottery:        srvLottery,
+		SrvParticipants:   srvParticipants,
+		SrvReward:         srvReward,
+		SrvValidatorsVote: srvValidatorsVote,
+		SrvMinerResponse:  srvMinerResponse,
 	}
 }
