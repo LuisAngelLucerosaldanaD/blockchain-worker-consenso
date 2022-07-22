@@ -4,6 +4,7 @@ import (
 	"blion-worker-consenso/internal/env"
 	"blion-worker-consenso/internal/grpc/auth_proto"
 	"blion-worker-consenso/internal/grpc/mine_proto"
+	"blion-worker-consenso/internal/grpc/wallet_proto"
 	"blion-worker-consenso/internal/logger"
 	"blion-worker-consenso/pkg/bk"
 	"context"
@@ -56,6 +57,7 @@ func (w Worker) doWork() {
 
 	clientMine := mine_proto.NewMineBlockServicesBlocksClient(connBk)
 	clientAuth := auth_proto.NewAuthServicesUsersClient(connAuth)
+	clientWallet := wallet_proto.NewWalletServicesWalletClient(connAuth)
 
 	resLogin, err := clientAuth.Login(context.Background(), &auth_proto.LoginRequest{
 		Email:    nil,
@@ -86,10 +88,17 @@ func (w Worker) doWork() {
 
 	if resBkMine == nil {
 		logger.Error.Printf("No se pudo obtener el bloque a minar")
+		return
 	}
 
 	if resBkMine.Error {
 		logger.Error.Printf(resBkMine.Msg)
+		return
+	}
+
+	if resBkMine.Data == nil {
+		logger.Info.Println(resBkMine.Msg)
+		return
 	}
 
 	block := resBkMine.Data
@@ -101,7 +110,7 @@ func (w Worker) doWork() {
 	}
 
 	if lotteryActive != nil {
-		lifeLottery := time.Now().Sub(*lotteryActive.LotteryStartDate).Seconds()
+		lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
 		if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
 			endDate := time.Now()
 			lotteryUpdated, _, err := w.Srv.SrvLottery.UpdateLottery(lotteryActive.ID, lotteryActive.BlockId, lotteryActive.RegistrationStartDate, &endDate, &endDate, nil, nil, 26)
@@ -208,6 +217,12 @@ func (w Worker) doWork() {
 			isApproved = true
 		}
 
+		participants, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lotteryMined.ID)
+		if err != nil {
+			logger.Error.Printf("error trayendo los participantes de la loteria: %s", err)
+			return
+		}
+
 		if isApproved {
 			resMine, err := clientMine.MineBlock(ctx, &mine_proto.RequestMineBlock{
 				Id:         block.Id,
@@ -242,7 +257,30 @@ func (w Worker) doWork() {
 				return
 			}
 
-			//TODO devolver el dinero congelado a los participantes
+			for _, participant := range participants {
+				resUnfreeze, err := clientWallet.UnFreezeMoney(ctx, &wallet_proto.RqUnFreezeMoney{WalletId: participant.WalletId, LotteryId: lotteryMined.ID})
+				if err != nil {
+					logger.Error.Printf("error descongelando el dinero: %s", err)
+					continue
+				}
+
+				if resUnfreeze == nil {
+					logger.Error.Printf("error descongelando el dinero")
+					continue
+				}
+
+				if resUnfreeze.Error {
+					logger.Error.Printf(resUnfreeze.Msg)
+					continue
+				}
+
+				_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
+				if err != nil {
+					logger.Error.Printf("error actualizando el participante", err)
+					continue
+				}
+			}
+
 			return
 		}
 
@@ -258,6 +296,31 @@ func (w Worker) doWork() {
 			logger.Error.Printf("error actualizando la loteria: %s", err)
 			return
 		}
+
+		for _, participant := range participants {
+			resUnfreeze, err := clientWallet.UnFreezeMoney(ctx, &wallet_proto.RqUnFreezeMoney{WalletId: participant.WalletId, LotteryId: lotteryMined.ID})
+			if err != nil {
+				logger.Error.Printf("error descongelando el dinero: %s", err)
+				continue
+			}
+
+			if resUnfreeze == nil {
+				logger.Error.Printf("error descongelando el dinero")
+				continue
+			}
+
+			if resUnfreeze.Error {
+				logger.Error.Printf(resUnfreeze.Msg)
+				continue
+			}
+
+			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
+			if err != nil {
+				logger.Error.Printf("error actualizando el participante", err)
+				continue
+			}
+		}
+
 		return
 	}
 
