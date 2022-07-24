@@ -31,6 +31,8 @@ type App struct {
 	SubscriptionTime  int    `json:"subscription_time"`
 	MaxMiners         int    `json:"max_miners"`
 	MaxValidator      int    `json:"max_validator"`
+	FeeMine           int    `json:"fee_mine"`
+	FeeValidators     int    `json:"fee_validators"`
 }
 
 type DB struct {
