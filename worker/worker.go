@@ -143,98 +143,25 @@ func (w Worker) doWork() {
 	return
 }
 
-func shuffle(data []string, maxParticipants int) []string {
-	lenSlice := maxParticipants
-	if len(data) < maxParticipants {
-		lenSlice = len(data)
-	}
-	ret := make([]string, lenSlice)
-	idxs := rand.Perm(len(data))
-	for i := 0; i < lenSlice; i++ {
-		ret[i] = data[idxs[i]]
-	}
-	return ret
-}
-
-func contains(data []string, value string) bool {
-	for _, v := range data {
-		if v == value {
-			return true
-		}
-	}
-
-	return false
-}
-
-func findOneParticipant(participants []*participants.Participants, value string) *participants.Participants {
-	for _, participant := range participants {
-		if participant.ID == value {
-			return participant
-		}
-	}
-	return nil
-}
-
-func getBlockToMine(clientMine mine_proto.MineBlockServicesBlocksClient, ctx context.Context) (*mine_proto.DataBlockMine, error) {
-	resBkMine, err := clientMine.GetBlockToMine(ctx, &mine_proto.GetBlockToMineRequest{})
-	if err != nil {
-		return nil, err
-	}
-
-	if resBkMine == nil {
-		return nil, fmt.Errorf("no se pudo obtener el bloque a minar")
-	}
-
-	if resBkMine.Error {
-		return nil, fmt.Errorf(resBkMine.Msg)
-	}
-
-	if resBkMine.Data == nil {
-		return nil, fmt.Errorf(resBkMine.Msg)
-	}
-
-	return resBkMine.Data, nil
-}
-
-func login(clientAuth auth_proto.AuthServicesUsersClient) (string, error) {
-	e := env.NewConfiguration()
-	resLogin, err := clientAuth.Login(context.Background(), &auth_proto.LoginRequest{
-		Email:    nil,
-		Nickname: &e.App.UserLogin,
-		Password: e.App.UserPassword,
-	})
-	if err != nil {
-		logger.Error.Printf("No se pudo obtener el token de autenticacion: %s", err)
-		return "", err
-	}
-
-	if resLogin == nil {
-		logger.Error.Printf("No se pudo obtener el token de autenticacion")
-		return "", fmt.Errorf("no se pudo obtener el token de autenticacion")
-	}
-
-	if resLogin.Error {
-		logger.Error.Printf(resLogin.Msg)
-		return "", fmt.Errorf(resLogin.Msg)
-	}
-
-	return resLogin.Data.AccessToken, nil
-}
-
 func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 	e := env.NewConfiguration()
 	lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
 	if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
-		endDate := time.Now()
-		lotteryUpdated, _, err := w.Srv.SrvLottery.UpdateLottery(lotteryActive.ID, lotteryActive.BlockId, lotteryActive.RegistrationStartDate, &endDate, &endDate, nil, nil, 26)
-		if err != nil {
-			logger.Error.Printf("error iniciando la loteria: %s", err)
-			return
-		}
 
 		participantsActive, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lotteryActive.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo los participantes: %s", err)
+			return
+		}
+
+		if participantsActive == nil || len(participantsActive) <= 0 {
+			return
+		}
+
+		endDate := time.Now()
+		lotteryUpdated, _, err := w.Srv.SrvLottery.UpdateLottery(lotteryActive.ID, lotteryActive.BlockId, lotteryActive.RegistrationStartDate, &endDate, &endDate, nil, nil, 26)
+		if err != nil {
+			logger.Error.Printf("error iniciando la loteria: %s", err)
 			return
 		}
 
@@ -398,7 +325,46 @@ func (w Worker) isApproved(clientAccount accounting_proto.AccountingServicesAcco
 				logger.Error.Printf(resAccount.Msg)
 				continue
 			}
+
+			_, _, err = w.Srv.SrvReward.CreateReward(uuid.New().String(), lotteryMined.ID, participant.WalletId, amount)
+			if err != nil {
+				logger.Error.Printf("error creando el registro de recompenzas, error: %v", err)
+				continue
+			}
 		}
+	}
+
+	resAccountMain, err := clientAccount.GetAccountingByWalletById(ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: e.App.WalletMain})
+	if err != nil {
+		logger.Error.Printf("error obteniendo la cuenta principal, error: %v", err)
+		return
+	}
+	if resAccountMain == nil {
+		logger.Error.Printf("error obteniendo la cuenta principal")
+		return
+	}
+	if resAccountMain.Error {
+		logger.Error.Printf(resAccountMain.Msg)
+		return
+	}
+
+	fee := feeBlock.Fee - (feeMiner + feeValidators)
+	resMain, err := clientAccount.SetAmountToAccounting(ctx, &accounting_proto.RequestSetAmountToAccounting{
+		WalletId: e.App.WalletMain,
+		Amount:   resAccountMain.Data.Amount + fee,
+		IdUser:   resAccountMain.Data.IdUser,
+	})
+	if err != nil {
+		logger.Error.Printf("error actualizando el dinero de la cuenta principal, error: %v", err)
+		return
+	}
+	if resMain == nil {
+		logger.Error.Printf("error actualizando el dinero de la cuenta principal")
+		return
+	}
+	if resMain.Error {
+		logger.Error.Printf(resMain.Msg)
+		return
 	}
 
 	return
@@ -514,4 +480,82 @@ func (w Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMine
 			}
 		}
 	}
+}
+
+func shuffle(data []string, maxParticipants int) []string {
+	lenSlice := maxParticipants
+	if len(data) < maxParticipants {
+		lenSlice = len(data)
+	}
+	ret := make([]string, lenSlice)
+	idxs := rand.Perm(len(data))
+	for i := 0; i < lenSlice; i++ {
+		ret[i] = data[idxs[i]]
+	}
+	return ret
+}
+
+func contains(data []string, value string) bool {
+	for _, v := range data {
+		if v == value {
+			return true
+		}
+	}
+
+	return false
+}
+
+func findOneParticipant(participants []*participants.Participants, value string) *participants.Participants {
+	for _, participant := range participants {
+		if participant.ID == value {
+			return participant
+		}
+	}
+	return nil
+}
+
+func getBlockToMine(clientMine mine_proto.MineBlockServicesBlocksClient, ctx context.Context) (*mine_proto.DataBlockMine, error) {
+	resBkMine, err := clientMine.GetBlockToMine(ctx, &mine_proto.GetBlockToMineRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	if resBkMine == nil {
+		return nil, fmt.Errorf("no se pudo obtener el bloque a minar")
+	}
+
+	if resBkMine.Error {
+		return nil, fmt.Errorf(resBkMine.Msg)
+	}
+
+	if resBkMine.Data == nil {
+		return nil, fmt.Errorf(resBkMine.Msg)
+	}
+
+	return resBkMine.Data, nil
+}
+
+func login(clientAuth auth_proto.AuthServicesUsersClient) (string, error) {
+	e := env.NewConfiguration()
+	resLogin, err := clientAuth.Login(context.Background(), &auth_proto.LoginRequest{
+		Email:    nil,
+		Nickname: &e.App.UserLogin,
+		Password: e.App.UserPassword,
+	})
+	if err != nil {
+		logger.Error.Printf("No se pudo obtener el token de autenticacion: %s", err)
+		return "", err
+	}
+
+	if resLogin == nil {
+		logger.Error.Printf("No se pudo obtener el token de autenticacion")
+		return "", fmt.Errorf("no se pudo obtener el token de autenticacion")
+	}
+
+	if resLogin.Error {
+		logger.Error.Printf(resLogin.Msg)
+		return "", fmt.Errorf(resLogin.Msg)
+	}
+
+	return resLogin.Data.AccessToken, nil
 }

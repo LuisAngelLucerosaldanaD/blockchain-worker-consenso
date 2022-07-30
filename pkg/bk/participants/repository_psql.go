@@ -113,7 +113,7 @@ func (s *psql) getByWalletIDAndLotteryID(walletId string, lotteryId string) (*Pa
 // GetByID consulta un registro por su ID
 func (s *psql) getByLotteryID(lotteryId string) ([]*Participants, error) {
 	var ms []*Participants
-	const psqlGetAll = ` SELECT id , lottery_id, wallet_id, amount, accepted, type_charge, returned, created_at, updated_at FROM bc.participants WHERE wallet_id = '%s'`
+	const psqlGetAll = ` SELECT id , lottery_id, wallet_id, amount, accepted, type_charge, returned, created_at, updated_at FROM bc.participants WHERE lottery_id = '%s'`
 
 	err := s.DB.Select(&ms, fmt.Sprintf(psqlGetAll, lotteryId))
 	if err != nil {

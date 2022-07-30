@@ -33,6 +33,7 @@ type App struct {
 	MaxValidator      int    `json:"max_validator"`
 	FeeMine           int    `json:"fee_mine"`
 	FeeValidators     int    `json:"fee_validators"`
+	WalletMain        string `json:"wallet_main"`
 }
 
 type DB struct {
