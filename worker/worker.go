@@ -226,6 +226,7 @@ func (w Worker) isApproved(clientAccount accounting_proto.AccountingServicesAcco
 		Hash:       resHash.Hash,
 		Nonce:      resHash.Nonce,
 		Difficulty: int32(resHash.Difficulty),
+		MinerId:    findOneParticipant(participantsLottery, resHash.ParticipantsId).WalletId,
 	})
 	if err != nil {
 		logger.Error.Printf("error agregando el bloque temporal a la cadena de bloques: %s", err)
