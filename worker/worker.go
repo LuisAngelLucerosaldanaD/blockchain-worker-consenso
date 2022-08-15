@@ -18,8 +18,21 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcMetadata "google.golang.org/grpc/metadata"
+	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"time"
+)
+
+var (
+	isFinish           = true
+	clientMine         mine_proto.MineBlockServicesBlocksClient
+	clientAuth         auth_proto.AuthServicesUsersClient
+	clientAccount      accounting_proto.AccountingServicesAccountingClient
+	clientWallet       wallet_proto.WalletServicesWalletClient
+	minersAccepted     = map[string]string{}
+	validatorsAccepted = map[string]string{}
 )
 
 type Worker struct {
@@ -44,11 +57,18 @@ func (w Worker) Execute() {
 
 func (w Worker) doWork() {
 
+	if !isFinish {
+		return
+	}
+
+	isFinish = false
+
 	e := env.NewConfiguration()
 
 	connBk, err := grpc.Dial(e.BlockService.Port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Error.Printf("error conectando con el servicio auth de blockchain: %s", err)
+		isFinish = true
 		return
 	}
 	defer connBk.Close()
@@ -56,43 +76,49 @@ func (w Worker) doWork() {
 	connAuth, err := grpc.Dial(e.AuthService.Port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Error.Printf("error conectando con el servicio auth de blockchain: %s", err)
+		isFinish = true
 		return
 	}
 	defer connAuth.Close()
 
-	clientMine := mine_proto.NewMineBlockServicesBlocksClient(connBk)
-	clientAuth := auth_proto.NewAuthServicesUsersClient(connAuth)
-	clientAccount := accounting_proto.NewAccountingServicesAccountingClient(connAuth)
-	clientWallet := wallet_proto.NewWalletServicesWalletClient(connAuth)
+	clientMine = mine_proto.NewMineBlockServicesBlocksClient(connBk)
+	clientAuth = auth_proto.NewAuthServicesUsersClient(connAuth)
+	clientAccount = accounting_proto.NewAccountingServicesAccountingClient(connAuth)
+	clientWallet = wallet_proto.NewWalletServicesWalletClient(connAuth)
 
-	token, err := login(clientAuth)
+	token, err := login()
 	if err != nil {
 		logger.Error.Printf("No se pudo obtener el token de autorización, error: %v", err)
+		isFinish = true
 		return
 	}
 
 	ctx := grpcMetadata.AppendToOutgoingContext(context.Background(), "authorization", token)
 
-	block, err := getBlockToMine(clientMine, ctx)
+	block, err := getBlockToMine(ctx)
 	if err != nil {
 		logger.Error.Printf("No se pudo obtener el bloque a minar, error: %v", err)
+		isFinish = true
 		return
 	}
 
 	lotteryActive, _, err := w.Srv.SrvLottery.GetLotteryActive()
 	if err != nil {
 		logger.Error.Printf("error trayendo una loteria activa: %s", err)
+		isFinish = true
 		return
 	}
 
 	if lotteryActive != nil {
 		w.isLotteryActive(lotteryActive)
+		isFinish = true
 		return
 	}
 
 	lotteryMined, _, err := w.Srv.SrvLottery.GetLotteryActiveForMined()
 	if err != nil {
 		logger.Error.Printf("error trayendo una loteria lista para minar: %s", err)
+		isFinish = true
 		return
 	}
 
@@ -100,17 +126,20 @@ func (w Worker) doWork() {
 		resHash, _, err := w.Srv.SrvMinerResponse.GetMinerResponseRegister(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo el hash del minero: %s", err)
+			isFinish = true
 			return
 		}
 		votesInFavor := 0
 		votes, err := w.Srv.SrvValidatorsVote.GetAllValidatorVotesByLotteryID(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo los votos de los validadores: %s", err)
+			isFinish = true
 			return
 		}
 
 		if len(votes) != e.App.MaxValidator {
 			logger.Error.Printf("Se requiere la totalidad de los votos designado en la loteria")
+			isFinish = true
 			return
 		}
 
@@ -123,15 +152,18 @@ func (w Worker) doWork() {
 		participantsLottery, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo los participantes de la loteria: %s", err)
+			isFinish = true
 			return
 		}
 
 		if (votesInFavor*100)/len(votes) > 51 {
-			w.isApproved(clientAccount, clientMine, ctx, block, resHash, clientWallet, lotteryMined, participantsLottery)
+			w.isApproved(ctx, block, resHash, lotteryMined, participantsLottery)
+			isFinish = true
 			return
 		}
 
-		w.isNotApproved(resHash, lotteryMined, participantsLottery, ctx, clientWallet)
+		w.isNotApproved(resHash, lotteryMined, participantsLottery, ctx)
+		isFinish = true
 		return
 	}
 
@@ -140,11 +172,13 @@ func (w Worker) doWork() {
 		logger.Error.Printf("No se pudo obtener el bloque a minar, error: %s", err)
 	}
 
+	isFinish = true
 	return
 }
 
 func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 	e := env.NewConfiguration()
+	participantsIds := map[string]string{}
 	lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
 	if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
 
@@ -154,7 +188,7 @@ func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 			return
 		}
 
-		if participantsActive == nil || len(participantsActive) <= 0 {
+		if participantsActive == nil || len(participantsActive) < (e.App.MaxValidator+e.App.MaxMiners) {
 			return
 		}
 
@@ -165,49 +199,41 @@ func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 			return
 		}
 
-		participantsLottery := make([]string, len(participantsActive))
-
-		for i, participant := range participantsActive {
-			participantsLottery[i] = participant.ID
-		}
-
-		rand.Shuffle(len(participantsLottery), func(i, j int) {
-			participantsLottery[i], participantsLottery[j] = participantsLottery[j], participantsLottery[i]
+		rand.Shuffle(len(participantsActive), func(i, j int) {
+			participantsActive[i], participantsActive[j] = participantsActive[j], participantsActive[i]
 		})
 
-		miners := shuffle(participantsLottery, e.App.MaxMiners)
-
-		newParticipants := make([]string, len(participantsLottery)-e.App.MaxMiners)
-		counter := 0
-		for _, participant := range participantsLottery {
-			if !contains(miners, participant) {
-				newParticipants[counter] = participant
-				counter++
+		for _, p := range participantsActive {
+			tickets := int64(math.Round(float64(p.Amount) / float64(e.App.TicketsPrice)))
+			for j := int64(0); j < tickets; j++ {
+				participantsIds[p.ID+strconv.FormatInt(j, 10)] = p.WalletId
 			}
 		}
 
-		rand.Shuffle(len(newParticipants), func(i, j int) {
-			newParticipants[i], newParticipants[j] = newParticipants[j], newParticipants[i]
-		})
+		GetMinersAndValidators(participantsIds)
 
-		validators := shuffle(newParticipants, e.App.MaxValidator)
-
-		for _, participant := range participantsActive {
-			if contains(miners, participant.ID) {
-				_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 23, false)
-				if err != nil {
-					logger.Error.Printf("error actulizando el registro del participante: %s", err)
-					return
-				}
-			} else if contains(validators, participant.ID) {
-				_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 24, false)
-				if err != nil {
-					logger.Error.Printf("error actulizando el registro del participante: %s", err)
-					return
-				}
+		for key := range minersAccepted {
+			participant := findOneParticipant(participantsActive, strings.Split("-", key)[0])
+			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 23, false)
+			if err != nil {
+				logger.Error.Printf("error actulizando el registro del participante: %s", err)
+				return
 			}
 		}
 
+		for key := range validatorsAccepted {
+			participant := findOneParticipant(participantsActive, strings.Split("-", key)[0])
+			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 24, false)
+			if err != nil {
+				logger.Error.Printf("error actulizando el registro del participante: %s", err)
+				return
+			}
+		}
+
+		minersAccepted = make(map[string]string)
+		validatorsAccepted = make(map[string]string)
+
+		//TODO validar nuevo metodo de sorteo
 		endDate = time.Now()
 		_, _, err = w.Srv.SrvLottery.UpdateLottery(lotteryUpdated.ID, lotteryUpdated.BlockId, lotteryUpdated.RegistrationStartDate, lotteryUpdated.RegistrationEndDate, lotteryUpdated.LotteryStartDate, &endDate, nil, 27)
 		if err != nil {
@@ -218,7 +244,7 @@ func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 	return
 }
 
-func (w Worker) isApproved(clientAccount accounting_proto.AccountingServicesAccountingClient, clientMine mine_proto.MineBlockServicesBlocksClient, ctx context.Context, block *mine_proto.DataBlockMine, resHash *miner_response.MinerResponse, clientWallet wallet_proto.WalletServicesWalletClient, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants) {
+func (w Worker) isApproved(ctx context.Context, block *mine_proto.DataBlockMine, resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants) {
 
 	e := env.NewConfiguration()
 	resMine, err := clientMine.MineBlock(ctx, &mine_proto.RequestMineBlock{
@@ -371,7 +397,7 @@ func (w Worker) isApproved(clientAccount accounting_proto.AccountingServicesAcco
 	return
 }
 
-func (w Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants, ctx context.Context, clientWallet wallet_proto.WalletServicesWalletClient) {
+func (w Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants, ctx context.Context) {
 	_, _, err := w.Srv.SrvMinerResponse.UpdateMinerResponse(resHash.ID, lotteryMined.ID, resHash.ParticipantsId, resHash.Hash, 30, resHash.Nonce, resHash.Difficulty)
 	if err != nil {
 		logger.Error.Printf("error actualizando el hash del minero como aceptado: %s", err)
@@ -483,27 +509,37 @@ func (w Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMine
 	}
 }
 
-func shuffle(data []string, maxParticipants int) []string {
-	lenSlice := maxParticipants
-	if len(data) < maxParticipants {
-		lenSlice = len(data)
-	}
-	ret := make([]string, lenSlice)
-	idxs := rand.Perm(len(data))
-	for i := 0; i < lenSlice; i++ {
-		ret[i] = data[idxs[i]]
-	}
-	return ret
-}
+func GetMinersAndValidators(participantsIds map[string]string) {
+	e := env.NewConfiguration()
 
-func contains(data []string, value string) bool {
-	for _, v := range data {
-		if v == value {
-			return true
+	numberAccepted := rand.Intn(60-1) + 1
+	counter := 0
+	participantID := ""
+	for key, participant := range participantsIds {
+		if counter == numberAccepted {
+			if len(minersAccepted) == 0 || len(minersAccepted) == len(validatorsAccepted) {
+				minersAccepted[key] = participant
+			} else if len(validatorsAccepted) < len(minersAccepted) {
+				validatorsAccepted[key] = participant
+			}
+			participantID = strings.Split("-", key)[0]
+			delete(participantsIds, key)
+			break
+		}
+		counter++
+	}
+
+	for key := range participantsIds {
+		if participantID == strings.Split("-", key)[0] {
+			delete(participantsIds, key)
 		}
 	}
 
-	return false
+	if len(minersAccepted) == e.App.MaxMiners && len(validatorsAccepted) == e.App.MaxValidator {
+		return
+	}
+
+	GetMinersAndValidators(participantsIds)
 }
 
 func findOneParticipant(participants []*participants.Participants, value string) *participants.Participants {
@@ -515,7 +551,7 @@ func findOneParticipant(participants []*participants.Participants, value string)
 	return nil
 }
 
-func getBlockToMine(clientMine mine_proto.MineBlockServicesBlocksClient, ctx context.Context) (*mine_proto.DataBlockMine, error) {
+func getBlockToMine(ctx context.Context) (*mine_proto.DataBlockMine, error) {
 	resBkMine, err := clientMine.GetBlockToMine(ctx, &mine_proto.GetBlockToMineRequest{})
 	if err != nil {
 		return nil, err
@@ -536,7 +572,7 @@ func getBlockToMine(clientMine mine_proto.MineBlockServicesBlocksClient, ctx con
 	return resBkMine.Data, nil
 }
 
-func login(clientAuth auth_proto.AuthServicesUsersClient) (string, error) {
+func login() (string, error) {
 	e := env.NewConfiguration()
 	resLogin, err := clientAuth.Login(context.Background(), &auth_proto.LoginRequest{
 		Email:    nil,

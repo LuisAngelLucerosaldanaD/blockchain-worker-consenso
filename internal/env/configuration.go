@@ -34,6 +34,7 @@ type App struct {
 	FeeMine           int    `json:"fee_mine"`
 	FeeValidators     int    `json:"fee_validators"`
 	WalletMain        string `json:"wallet_main"`
+	TicketsPrice      int    `json:"tickets_price"`
 }
 
 type DB struct {

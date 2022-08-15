@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	color.Blue("Worker MTI V1.0.9 ", time.Now())
+	color.Blue("Worker BLion V1.0.0 ", time.Now())
 	db := dbx.GetConnection()
 	srv := bk.NewServerBk(db, nil, uuid.New().String())
 	wk := worker.NewWorker(srv)
