@@ -5,6 +5,7 @@ import (
 	"blion-worker-consenso/internal/grpc/accounting_proto"
 	"blion-worker-consenso/internal/grpc/auth_proto"
 	"blion-worker-consenso/internal/grpc/mine_proto"
+	"blion-worker-consenso/internal/grpc/transactions_proto"
 	"blion-worker-consenso/internal/grpc/wallet_proto"
 	"blion-worker-consenso/internal/logger"
 	"blion-worker-consenso/pkg/bk"
@@ -14,7 +15,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcMetadata "google.golang.org/grpc/metadata"
@@ -26,10 +26,10 @@ import (
 )
 
 var (
-	isFinish           = true
 	clientMine         mine_proto.MineBlockServicesBlocksClient
 	clientAuth         auth_proto.AuthServicesUsersClient
 	clientAccount      accounting_proto.AccountingServicesAccountingClient
+	clientTrx          transactions_proto.TransactionsServicesClient
 	clientWallet       wallet_proto.WalletServicesWalletClient
 	minersAccepted     = map[string]string{}
 	validatorsAccepted = map[string]string{}
@@ -44,31 +44,20 @@ func NewWorker(srv *bk.Server) IWorker {
 }
 
 func (w Worker) Execute() {
-	c := cron.New(cron.WithSeconds())
-	cfg := env.NewConfiguration()
-	_, err := c.AddFunc(cfg.App.TimerInterval, func() { w.doWork() })
-	if err != nil {
-		logger.Error.Println("error execute: ", err)
+
+	c := env.NewConfiguration()
+	for {
+		w.doWork()
+		time.Sleep(time.Duration(c.App.WorkerInterval) * time.Second)
 	}
-	c.Start()
-	defer c.Stop()
-	select {}
 }
 
 func (w Worker) doWork() {
-
-	if !isFinish {
-		return
-	}
-
-	isFinish = false
-
 	e := env.NewConfiguration()
 
 	connBk, err := grpc.Dial(e.BlockService.Port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Error.Printf("error conectando con el servicio auth de blockchain: %s", err)
-		isFinish = true
 		return
 	}
 	defer connBk.Close()
@@ -76,7 +65,13 @@ func (w Worker) doWork() {
 	connAuth, err := grpc.Dial(e.AuthService.Port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logger.Error.Printf("error conectando con el servicio auth de blockchain: %s", err)
-		isFinish = true
+		return
+	}
+	defer connAuth.Close()
+
+	connTrx, err := grpc.Dial(e.TransactionsService.Port, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Error.Printf("error conectando con el servicio auth de blockchain: %s", err)
 		return
 	}
 	defer connAuth.Close()
@@ -85,11 +80,11 @@ func (w Worker) doWork() {
 	clientAuth = auth_proto.NewAuthServicesUsersClient(connAuth)
 	clientAccount = accounting_proto.NewAccountingServicesAccountingClient(connAuth)
 	clientWallet = wallet_proto.NewWalletServicesWalletClient(connAuth)
+	clientTrx = transactions_proto.NewTransactionsServicesClient(connTrx)
 
 	token, err := login()
 	if err != nil {
 		logger.Error.Printf("No se pudo obtener el token de autorización, error: %v", err)
-		isFinish = true
 		return
 	}
 
@@ -98,27 +93,23 @@ func (w Worker) doWork() {
 	block, err := getBlockToMine(ctx)
 	if err != nil {
 		logger.Error.Printf("No se pudo obtener el bloque a minar, error: %v", err)
-		isFinish = true
 		return
 	}
 
 	lotteryActive, _, err := w.Srv.SrvLottery.GetLotteryActive()
 	if err != nil {
 		logger.Error.Printf("error trayendo una loteria activa: %s", err)
-		isFinish = true
 		return
 	}
 
 	if lotteryActive != nil {
 		w.isLotteryActive(lotteryActive)
-		isFinish = true
 		return
 	}
 
 	lotteryMined, _, err := w.Srv.SrvLottery.GetLotteryActiveForMined()
 	if err != nil {
 		logger.Error.Printf("error trayendo una loteria lista para minar: %s", err)
-		isFinish = true
 		return
 	}
 
@@ -126,20 +117,17 @@ func (w Worker) doWork() {
 		resHash, _, err := w.Srv.SrvMinerResponse.GetMinerResponseRegister(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo el hash del minero: %s", err)
-			isFinish = true
 			return
 		}
 		votesInFavor := 0
 		votes, err := w.Srv.SrvValidatorsVote.GetAllValidatorVotesByLotteryID(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo los votos de los validadores: %s", err)
-			isFinish = true
 			return
 		}
 
 		if len(votes) != e.App.MaxValidator {
 			logger.Error.Printf("Se requiere la totalidad de los votos designado en la loteria")
-			isFinish = true
 			return
 		}
 
@@ -152,18 +140,15 @@ func (w Worker) doWork() {
 		participantsLottery, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lotteryMined.ID)
 		if err != nil {
 			logger.Error.Printf("error trayendo los participantes de la loteria: %s", err)
-			isFinish = true
 			return
 		}
 
 		if (votesInFavor*100)/len(votes) > 51 {
 			w.isApproved(ctx, block, resHash, lotteryMined, participantsLottery)
-			isFinish = true
 			return
 		}
 
 		w.isNotApproved(resHash, lotteryMined, participantsLottery, ctx)
-		isFinish = true
 		return
 	}
 
@@ -172,7 +157,6 @@ func (w Worker) doWork() {
 		logger.Error.Printf("No se pudo obtener el bloque a minar, error: %s", err)
 	}
 
-	isFinish = true
 	return
 }
 
@@ -204,7 +188,7 @@ func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 		})
 
 		for _, p := range participantsActive {
-			tickets := int64(math.Round(float64(p.Amount) / float64(e.App.TicketsPrice)))
+			tickets := int64(math.Round(p.Amount / float64(e.App.TicketsPrice)))
 			for j := int64(0); j < tickets; j++ {
 				participantsIds[p.ID+strconv.FormatInt(j, 10)] = p.WalletId
 			}
@@ -237,7 +221,7 @@ func (w Worker) isLotteryActive(lotteryActive *lotteries.Lottery) {
 		endDate = time.Now()
 		_, _, err = w.Srv.SrvLottery.UpdateLottery(lotteryUpdated.ID, lotteryUpdated.BlockId, lotteryUpdated.RegistrationStartDate, lotteryUpdated.RegistrationEndDate, lotteryUpdated.LotteryStartDate, &endDate, nil, 27)
 		if err != nil {
-			logger.Error.Printf("error iniciando la loteria: %s", err)
+			logger.Error.Printf("error finalizando la loteria: %s", err)
 			return
 		}
 	}
@@ -287,9 +271,15 @@ func (w Worker) isApproved(ctx context.Context, block *mine_proto.DataBlockMine,
 		return
 	}
 
-	feeMiner := (feeBlock.Fee * float64(e.App.FeeMine)) / 100
+	err = processTransactions(lotteryMined.BlockId, ctx)
+	if err != nil {
+		logger.Error.Printf("error procesando las transacciones: %v", err)
+		return
+	}
 
-	feeValidators := (feeBlock.Fee * float64(e.App.FeeValidators)) / 100
+	feeMiner := (feeBlock.Fee * e.App.FeeMine) / 100
+
+	feeValidators := (feeBlock.Fee * e.App.FeeValidators) / 100
 
 	for _, participant := range participantsLottery {
 		resUnfreeze, err := clientWallet.UnFreezeMoney(ctx, &wallet_proto.RqUnFreezeMoney{WalletId: participant.WalletId, LotteryId: lotteryMined.ID})
@@ -441,16 +431,16 @@ func (w Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMine
 	if walletPenalties != nil && len(walletPenalties) > 0 {
 		if len(walletPenalties) == 1 {
 			penaltyPercentage = 25
-			amountPenalty = float64((freezeMoney * 25) / 100)
+			amountPenalty = (freezeMoney * 25) / 100
 		} else if len(walletPenalties) == 2 {
 			penaltyPercentage = 50
-			amountPenalty = float64((freezeMoney * 50) / 100)
+			amountPenalty = (freezeMoney * 50) / 100
 		} else if len(walletPenalties) >= 3 {
 			penaltyPercentage = 100
-			amountPenalty = float64(freezeMoney)
+			amountPenalty = freezeMoney
 		}
 	} else {
-		amountPenalty = float64(freezeMoney * 10 / 100)
+		amountPenalty = freezeMoney * 10 / 100
 		penaltyPercentage = 10
 	}
 
@@ -570,6 +560,69 @@ func getBlockToMine(ctx context.Context) (*mine_proto.DataBlockMine, error) {
 	}
 
 	return resBkMine.Data, nil
+}
+
+func processTransactions(blockId int64, ctx context.Context) error {
+
+	resWsAllTrx, err := clientTrx.GetTransactionsByBlockId(ctx, &transactions_proto.RqGetTransactionByBlock{BlockId: blockId})
+	if err != nil {
+		logger.Error.Printf("no se pudo obtener todas las transacciones para minar, error: %V", err)
+		return err
+	}
+
+	if resWsAllTrx == nil {
+		logger.Error.Printf("no se pudo obtener todas las transacciones para minar")
+		return fmt.Errorf("no se pudo obtener todas las transacciones para minar")
+	}
+
+	if resWsAllTrx.Error {
+		logger.Error.Printf(resWsAllTrx.Msg)
+		return fmt.Errorf(resWsAllTrx.Msg)
+	}
+
+	transactions := resWsAllTrx.Data
+
+	for _, transaction := range transactions {
+		resAccountTo, err := clientAccount.GetAccountingByWalletById(ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: transaction.To})
+		if err != nil {
+			logger.Error.Printf("couldn't get account to wallet by id_wallet: %v", err)
+			return err
+		}
+
+		if resAccountTo == nil {
+			logger.Error.Printf("couldn't get account to wallet by id_wallet: %v", err)
+			return fmt.Errorf("couldn't get account to wallet by id_wallet")
+		}
+
+		if resAccountTo.Error {
+			logger.Error.Printf(resAccountTo.Msg)
+			return fmt.Errorf(resAccountTo.Msg)
+		}
+
+		accountTo := resAccountTo.Data
+
+		accountToAmounted, err := clientAccount.SetAmountToAccounting(ctx, &accounting_proto.RequestSetAmountToAccounting{
+			WalletId: transaction.To,
+			Amount:   accountTo.Amount + accountTo.Amount,
+			IdUser:   accountTo.IdUser,
+		})
+		if err != nil {
+			logger.Error.Printf("couldn't update amount from user: %v", err)
+			return err
+		}
+
+		if accountToAmounted == nil {
+			logger.Error.Printf("couldn't update amount from user")
+			return fmt.Errorf("couldn't update amount from use")
+		}
+
+		if accountToAmounted.Error {
+			logger.Error.Printf(accountToAmounted.Msg)
+			return fmt.Errorf(accountToAmounted.Msg)
+		}
+	}
+
+	return nil
 }
 
 func login() (string, error) {

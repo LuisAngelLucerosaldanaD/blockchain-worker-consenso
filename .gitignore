@@ -6,7 +6,7 @@
 *.so
 *.dylib
 *.zip
-onlyone-smc
+blion-worker-consenso
 
 
 # Test binary, build with `go test -c`
