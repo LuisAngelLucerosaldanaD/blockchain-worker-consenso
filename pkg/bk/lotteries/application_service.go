@@ -17,6 +17,7 @@ type PortsServerLottery interface {
 	GetAllLottery() ([]*Lottery, error)
 	GetLotteryActive() (*Lottery, int, error)
 	GetLotteryActiveForMined() (*Lottery, int, error)
+	GetLotteryActiveOrReadyMined() (*Lottery, int, error)
 }
 
 type service struct {
@@ -105,6 +106,15 @@ func (s *service) GetLotteryActiveForMined() (*Lottery, int, error) {
 	m, err := s.repository.getActiveForMined()
 	if err != nil {
 		logger.Error.Println(s.txID, " - couldn`t getActive, error: ", err)
+		return nil, 22, err
+	}
+	return m, 29, nil
+}
+
+func (s *service) GetLotteryActiveOrReadyMined() (*Lottery, int, error) {
+	m, err := s.repository.getActiveOrReadyToMined()
+	if err != nil {
+		logger.Error.Println(s.txID, " - couldn`t getActiveOrReadyToMined, error: ", err)
 		return nil, 22, err
 	}
 	return m, 29, nil

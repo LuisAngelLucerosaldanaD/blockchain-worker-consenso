@@ -1,6 +1,8 @@
 package worker
 
+import "blion-worker-consenso/pkg/bk/lotteries"
+
 type IWorker interface {
 	Execute()
-	doWork()
+	doWork(workItem *lotteries.Lottery)
 }

@@ -19,6 +19,7 @@ type ServicesLotteryRepository interface {
 	getAll() ([]*Lottery, error)
 	getActive() (*Lottery, error)
 	getActiveForMined() (*Lottery, error)
+	getActiveOrReadyToMined() (*Lottery, error)
 }
 
 func FactoryStorage(db *sqlx.DB, user *models.User, txID string) ServicesLotteryRepository {
