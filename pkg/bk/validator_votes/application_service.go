@@ -15,6 +15,7 @@ type PortsServerValidatorVotes interface {
 	GetValidatorVotesByID(id string) (*ValidatorVotes, int, error)
 	GetAllValidatorVotes() ([]*ValidatorVotes, error)
 	GetAllValidatorVotesByLotteryID(lotteryID string) ([]*ValidatorVotes, error)
+	GetVotesInFavorByLotteryId(id string) (int64, error)
 }
 
 type service struct {
@@ -92,4 +93,17 @@ func (s *service) GetAllValidatorVotes() ([]*ValidatorVotes, error) {
 
 func (s *service) GetAllValidatorVotesByLotteryID(lotteryID string) ([]*ValidatorVotes, error) {
 	return s.repository.getByLotteryID(lotteryID)
+}
+
+func (s *service) GetVotesInFavorByLotteryId(id string) (int64, error) {
+	if !govalidator.IsUUID(id) {
+		logger.Error.Println(s.txID, " - don't meet validations:", fmt.Errorf("id isn't uuid"))
+		return 0, fmt.Errorf("id isn't uuid")
+	}
+	m, err := s.repository.getVotesInFavor(id)
+	if err != nil {
+		logger.Error.Println(s.txID, " - couldn`t getVotesInFavor row:", err)
+		return 0, err
+	}
+	return m, nil
 }

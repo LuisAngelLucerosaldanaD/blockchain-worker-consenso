@@ -33,6 +33,7 @@ type App struct {
 	MaxValidator      int     `json:"max_validator"`
 	FeeMine           float64 `json:"fee_mine"`
 	FeeValidators     float64 `json:"fee_validators"`
+	FeeNodes          float64 `json:"fee_nodes"`
 	WalletMain        string  `json:"wallet_main"`
 	TicketsPrice      int     `json:"tickets_price"`
 	WorkerInterval    int     `json:"worker_interval"`

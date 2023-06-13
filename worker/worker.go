@@ -8,6 +8,7 @@ import (
 	"blion-worker-consenso/internal/grpc/transactions_proto"
 	"blion-worker-consenso/internal/grpc/wallet_proto"
 	"blion-worker-consenso/internal/logger"
+	"blion-worker-consenso/pkg/auth"
 	"blion-worker-consenso/pkg/bk"
 	"blion-worker-consenso/pkg/bk/lotteries"
 	"blion-worker-consenso/pkg/bk/miner_response"
@@ -34,7 +35,8 @@ var (
 )
 
 type Worker struct {
-	Srv           *bk.Server
+	SrvBK         *bk.Server
+	SrvAuth       *auth.Server
 	ClientMine    mine_proto.MineBlockServicesBlocksClient
 	ClientAuth    auth_proto.AuthServicesUsersClient
 	ClientAccount accounting_proto.AccountingServicesAccountingClient
@@ -44,8 +46,8 @@ type Worker struct {
 	Ctx           context.Context
 }
 
-func NewWorker(srv *bk.Server) IWorker {
-	return &Worker{Srv: srv}
+func NewWorker(srvBk *bk.Server, srvAuth *auth.Server) IWorker {
+	return &Worker{SrvBK: srvBk, SrvAuth: srvAuth}
 }
 
 func (w *Worker) Execute() {
@@ -64,7 +66,7 @@ func (w *Worker) WorkerChanel() {
 		return
 	}
 
-	lottery, _, err := w.Srv.SrvLottery.GetLotteryActiveOrReadyMined()
+	lottery, _, err := w.SrvBK.SrvLottery.GetLotteryActiveOrReadyMined()
 	if err != nil {
 		logger.Error.Printf("error trayendo una lotería activa: %s", err)
 		return
@@ -119,15 +121,82 @@ func (w *Worker) doWork(workItem *lotteries.Lottery) {
 	return
 }
 
+func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
+	e := env.NewConfiguration()
+	participantsIds := map[string]string{}
+	lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
+	if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
+
+		participantsActive, _, err := w.SrvBK.SrvParticipants.GetParticipantsByLotteryID(lotteryActive.ID)
+		if err != nil {
+			logger.Error.Printf("error trayendo los participantes: %s", err)
+			return err
+		}
+
+		if participantsActive == nil || len(participantsActive) < (e.App.MaxValidator+e.App.MaxMiners) {
+			return nil
+		}
+
+		endDate := time.Now()
+		lotteryUpdated, _, err := w.SrvBK.SrvLottery.UpdateLottery(lotteryActive.ID, lotteryActive.BlockId, lotteryActive.RegistrationStartDate, &endDate, &endDate, nil, nil, 26)
+		if err != nil {
+			logger.Error.Printf("error iniciando la loteria: %s", err)
+			return err
+		}
+
+		rand.Shuffle(len(participantsActive), func(i, j int) {
+			participantsActive[i], participantsActive[j] = participantsActive[j], participantsActive[i]
+		})
+
+		for _, p := range participantsActive {
+			tickets := int64(math.Round(p.Amount / float64(e.App.TicketsPrice)))
+			for j := int64(0); j < tickets; j++ {
+				participantsIds[p.ID+"/"+strconv.FormatInt(j, 10)] = p.WalletId
+			}
+		}
+
+		GetMinersAndValidators(participantsIds)
+
+		for key := range minersAccepted {
+			participant := findOneParticipant(participantsActive, strings.Split("/", key)[0])
+			_, _, err = w.SrvBK.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 23, false)
+			if err != nil {
+				logger.Error.Printf("error actulizando el registro del participante: %s", err)
+				return err
+			}
+		}
+
+		for key := range validatorsAccepted {
+			participant := findOneParticipant(participantsActive, strings.Split("/", key)[0])
+			_, _, err = w.SrvBK.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 24, false)
+			if err != nil {
+				logger.Error.Printf("error actulizando el registro del participante: %s", err)
+				return err
+			}
+		}
+
+		minersAccepted = make(map[string]string)
+		validatorsAccepted = make(map[string]string)
+
+		endDate = time.Now()
+		_, _, err = w.SrvBK.SrvLottery.UpdateLottery(lotteryUpdated.ID, lotteryUpdated.BlockId, lotteryUpdated.RegistrationStartDate, lotteryUpdated.RegistrationEndDate, lotteryUpdated.LotteryStartDate, &endDate, nil, 27)
+		if err != nil {
+			logger.Error.Printf("error finalizando la loteria: %s", err)
+			return err
+		}
+	}
+	return nil
+}
+
 func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
 	e := env.NewConfiguration()
-	resHash, _, err := w.Srv.SrvMinerResponse.GetMinerResponseRegister(lottery.ID)
+	resHash, _, err := w.SrvBK.SrvMinerResponse.GetMinerResponseRegister(lottery.ID)
 	if err != nil {
 		logger.Error.Printf("error trayendo el hash del minero: %s", err)
 		return err
 	}
 	votesInFavor := 0
-	votes, err := w.Srv.SrvValidatorsVote.GetAllValidatorVotesByLotteryID(lottery.ID)
+	votes, err := w.SrvBK.SrvValidatorsVote.GetAllValidatorVotesByLotteryID(lottery.ID)
 	if err != nil {
 		logger.Error.Printf("error trayendo los votos de los validadores: %s", err)
 		return err
@@ -144,7 +213,7 @@ func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
 		}
 	}
 
-	participantsLottery, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lottery.ID)
+	participantsLottery, _, err := w.SrvBK.SrvParticipants.GetParticipantsByLotteryID(lottery.ID)
 	if err != nil {
 		logger.Error.Printf("error trayendo los participantes de la loteria: %s", err)
 		return err
@@ -155,73 +224,6 @@ func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
 	}
 
 	return w.isNotApproved(resHash, lottery, participantsLottery)
-}
-
-func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
-	e := env.NewConfiguration()
-	participantsIds := map[string]string{}
-	lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
-	if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
-
-		participantsActive, _, err := w.Srv.SrvParticipants.GetParticipantsByLotteryID(lotteryActive.ID)
-		if err != nil {
-			logger.Error.Printf("error trayendo los participantes: %s", err)
-			return err
-		}
-
-		if participantsActive == nil || len(participantsActive) < (e.App.MaxValidator+e.App.MaxMiners) {
-			return nil
-		}
-
-		endDate := time.Now()
-		lotteryUpdated, _, err := w.Srv.SrvLottery.UpdateLottery(lotteryActive.ID, lotteryActive.BlockId, lotteryActive.RegistrationStartDate, &endDate, &endDate, nil, nil, 26)
-		if err != nil {
-			logger.Error.Printf("error iniciando la loteria: %s", err)
-			return err
-		}
-
-		rand.Shuffle(len(participantsActive), func(i, j int) {
-			participantsActive[i], participantsActive[j] = participantsActive[j], participantsActive[i]
-		})
-
-		for _, p := range participantsActive {
-			tickets := int64(math.Round(p.Amount / float64(e.App.TicketsPrice)))
-			for j := int64(0); j < tickets; j++ {
-				participantsIds[p.ID+strconv.FormatInt(j, 10)] = p.WalletId
-			}
-		}
-
-		GetMinersAndValidators(participantsIds)
-
-		for key := range minersAccepted {
-			participant := findOneParticipant(participantsActive, strings.Split("-", key)[0])
-			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 23, false)
-			if err != nil {
-				logger.Error.Printf("error actulizando el registro del participante: %s", err)
-				return err
-			}
-		}
-
-		for key := range validatorsAccepted {
-			participant := findOneParticipant(participantsActive, strings.Split("-", key)[0])
-			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, lotteryActive.ID, participant.WalletId, participant.Amount, true, 24, false)
-			if err != nil {
-				logger.Error.Printf("error actulizando el registro del participante: %s", err)
-				return err
-			}
-		}
-
-		minersAccepted = make(map[string]string)
-		validatorsAccepted = make(map[string]string)
-
-		endDate = time.Now()
-		_, _, err = w.Srv.SrvLottery.UpdateLottery(lotteryUpdated.ID, lotteryUpdated.BlockId, lotteryUpdated.RegistrationStartDate, lotteryUpdated.RegistrationEndDate, lotteryUpdated.LotteryStartDate, &endDate, nil, 27)
-		if err != nil {
-			logger.Error.Printf("error finalizando la loteria: %s", err)
-			return err
-		}
-	}
-	return nil
 }
 
 func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants) error {
@@ -249,19 +251,19 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 		return fmt.Errorf(resMine.Msg)
 	}
 
-	_, _, err = w.Srv.SrvMinerResponse.UpdateMinerResponse(resHash.ID, lotteryMined.ID, resHash.ParticipantsId, resHash.Hash, 31, resHash.Nonce, resHash.Difficulty)
+	_, _, err = w.SrvBK.SrvMinerResponse.UpdateMinerResponse(resHash.ID, lotteryMined.ID, resHash.ParticipantsId, resHash.Hash, 31, resHash.Nonce, resHash.Difficulty)
 	if err != nil {
 		logger.Error.Printf("error actualizando el hash del minero como aceptado: %s", err)
 		return err
 	}
 	endProcess := time.Now()
-	_, _, err = w.Srv.SrvLottery.UpdateLottery(lotteryMined.ID, lotteryMined.BlockId, lotteryMined.RegistrationStartDate, lotteryMined.RegistrationEndDate, lotteryMined.LotteryStartDate, lotteryMined.LotteryEndDate, &endProcess, 28)
+	_, _, err = w.SrvBK.SrvLottery.UpdateLottery(lotteryMined.ID, lotteryMined.BlockId, lotteryMined.RegistrationStartDate, lotteryMined.RegistrationEndDate, lotteryMined.LotteryStartDate, lotteryMined.LotteryEndDate, &endProcess, 28)
 	if err != nil {
 		logger.Error.Printf("error actualizando la loteria: %s", err)
 		return err
 	}
 
-	feeBlock, _, err := w.Srv.SrvBlockFee.GetBlockFeeByBlockID(block)
+	feeBlock, _, err := w.SrvBK.SrvBlockFee.GetBlockFeeByBlockID(block)
 	if err != nil {
 		logger.Error.Printf("error trayendo el fee del bloque: %v", err)
 		return err
@@ -274,8 +276,8 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 	}
 
 	feeMiner := (feeBlock.Fee * e.App.FeeMine) / 100
-
 	feeValidators := (feeBlock.Fee * e.App.FeeValidators) / 100
+	feeNodes := (feeBlock.Fee * e.App.FeeNodes) / 100
 
 	for _, participant := range participantsLottery {
 		resUnfreeze, err := w.ClientWallet.UnFreezeMoney(w.Ctx, &wallet_proto.RqUnFreezeMoney{WalletId: participant.WalletId, LotteryId: lotteryMined.ID})
@@ -294,7 +296,7 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 			continue
 		}
 
-		_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
+		_, _, err = w.SrvBK.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
 		if err != nil {
 			logger.Error.Printf("error actualizando el participante", err)
 			continue
@@ -339,13 +341,15 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 				continue
 			}
 
-			_, _, err = w.Srv.SrvReward.CreateReward(uuid.New().String(), lotteryMined.ID, participant.WalletId, amount)
+			_, _, err = w.SrvBK.SrvReward.CreateReward(uuid.New().String(), lotteryMined.ID, participant.WalletId, amount)
 			if err != nil {
 				logger.Error.Printf("error creando el registro de recompenzas, error: %v", err)
 				continue
 			}
 		}
 	}
+
+	w.ProcessNode(feeNodes)
 
 	resAccountMain, err := w.ClientAccount.GetAccountingByWalletById(w.Ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: e.App.WalletMain})
 	if err != nil {
@@ -384,28 +388,25 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 }
 
 func (w *Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants) error {
-	_, _, err := w.Srv.SrvMinerResponse.UpdateMinerResponse(resHash.ID, lotteryMined.ID, resHash.ParticipantsId, resHash.Hash, 30, resHash.Nonce, resHash.Difficulty)
+	_, _, err := w.SrvBK.SrvMinerResponse.UpdateMinerResponse(resHash.ID, lotteryMined.ID, resHash.ParticipantsId, resHash.Hash, 30, resHash.Nonce, resHash.Difficulty)
 	if err != nil {
 		logger.Error.Printf("error actualizando el hash del minero como aceptado: %s", err)
 		return err
 	}
 
 	endProcess := time.Now()
-	_, _, err = w.Srv.SrvLottery.UpdateLottery(lotteryMined.ID, lotteryMined.BlockId, lotteryMined.RegistrationStartDate, lotteryMined.RegistrationEndDate, lotteryMined.LotteryStartDate, lotteryMined.LotteryEndDate, &endProcess, 32)
+	_, _, err = w.SrvBK.SrvLottery.UpdateLottery(lotteryMined.ID, lotteryMined.BlockId, lotteryMined.RegistrationStartDate, lotteryMined.RegistrationEndDate, lotteryMined.LotteryStartDate, lotteryMined.LotteryEndDate, &endProcess, 32)
 	if err != nil {
 		logger.Error.Printf("error actualizando la loteria: %s", err)
 		return err
 	}
 
 	miner := findOneParticipant(participantsLottery, resHash.ParticipantsId)
-	walletPenalties, err := w.Srv.SrvPenaltyParticipant.GetAllPenaltyParticipantsByWalletID(miner.WalletId)
+	walletPenalties, err := w.SrvBK.SrvPenaltyParticipant.GetAllPenaltyParticipantsByWalletID(miner.WalletId)
 	if err != nil {
 		logger.Error.Printf("error trayendo las multas del minero: %s", err)
 		return err
 	}
-
-	var amountPenalty = 0.0
-	var penaltyPercentage = 0.0
 
 	resFreezeMoney, err := w.ClientWallet.GetFrozenMoney(w.Ctx, &wallet_proto.RqGetFrozenMoney{WalletId: miner.WalletId})
 	if err != nil {
@@ -424,6 +425,9 @@ func (w *Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMin
 	}
 	freezeMoney := resFreezeMoney.Data
 
+	amountPenalty := freezeMoney * 10 / 100
+	penaltyPercentage := 10.0
+
 	if walletPenalties != nil && len(walletPenalties) > 0 {
 		if len(walletPenalties) == 1 {
 			penaltyPercentage = 25
@@ -435,12 +439,9 @@ func (w *Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMin
 			penaltyPercentage = 100
 			amountPenalty = freezeMoney
 		}
-	} else {
-		amountPenalty = freezeMoney * 10 / 100
-		penaltyPercentage = 10
 	}
 
-	_, _, err = w.Srv.SrvPenaltyParticipant.CreatePenaltyParticipants(uuid.New().String(), lotteryMined.ID, resHash.ParticipantsId, amountPenalty, penaltyPercentage)
+	_, _, err = w.SrvBK.SrvPenaltyParticipant.CreatePenaltyParticipants(uuid.New().String(), lotteryMined.ID, resHash.ParticipantsId, amountPenalty, penaltyPercentage)
 	if err != nil {
 		logger.Error.Printf("error multando al minero por fraude: %v", err)
 		return err
@@ -462,7 +463,7 @@ func (w *Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMin
 		return fmt.Errorf(resUnfreeze.Msg)
 	}
 
-	_, _, err = w.Srv.SrvParticipants.UpdateParticipants(miner.ID, miner.LotteryId, miner.WalletId, miner.Amount, miner.Accepted, miner.TypeCharge, true)
+	_, _, err = w.SrvBK.SrvParticipants.UpdateParticipants(miner.ID, miner.LotteryId, miner.WalletId, miner.Amount, miner.Accepted, miner.TypeCharge, true)
 	if err != nil {
 		logger.Error.Printf("error actualizando el participante", err)
 		return err
@@ -486,7 +487,7 @@ func (w *Worker) isNotApproved(resHash *miner_response.MinerResponse, lotteryMin
 				continue
 			}
 
-			_, _, err = w.Srv.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
+			_, _, err = w.SrvBK.SrvParticipants.UpdateParticipants(participant.ID, participant.LotteryId, participant.WalletId, participant.Amount, participant.Accepted, participant.TypeCharge, true)
 			if err != nil {
 				logger.Error.Printf("error actualizando el participante", err)
 				continue
@@ -608,7 +609,7 @@ func (w *Worker) login() (string, error) {
 
 func (w *Worker) createLottery() (*lotteries.Lottery, error) {
 
-	lottery, _, err := w.Srv.SrvLottery.CreateLottery(uuid.New().String(), w.Block.Id, time.Now(), nil, nil, nil, nil, 25)
+	lottery, _, err := w.SrvBK.SrvLottery.CreateLottery(uuid.New().String(), w.Block.Id, time.Now(), nil, nil, nil, nil, 25)
 	if err != nil {
 		logger.Error.Printf("No se pudo obtener el bloque a minar, error: %s", err)
 		return nil, err
@@ -675,7 +676,7 @@ func GetMinersAndValidators(participantsIds map[string]string) {
 			} else if len(validatorsAccepted) < len(minersAccepted) {
 				validatorsAccepted[key] = participant
 			}
-			participantID = strings.Split("-", key)[0]
+			participantID = strings.Split("/", key)[0]
 			delete(participantsIds, key)
 			break
 		}
@@ -683,7 +684,7 @@ func GetMinersAndValidators(participantsIds map[string]string) {
 	}
 
 	for key := range participantsIds {
-		if participantID == strings.Split("-", key)[0] {
+		if participantID == strings.Split("/", key)[0] {
 			delete(participantsIds, key)
 		}
 	}
@@ -702,4 +703,50 @@ func findOneParticipant(participants []*participants.Participants, value string)
 		}
 	}
 	return nil
+}
+
+func (w *Worker) ProcessNode(feeNodes float64) {
+	nodes, err := w.SrvAuth.SrvNodeWallet.GetAllNodeWallet()
+	if err != nil {
+		logger.Error.Printf("No se pudo obtener los nodos: %v", err)
+		return
+	}
+
+	if len(nodes) <= 0 {
+		return
+	}
+
+	for _, node := range nodes {
+		resAccountNode, err := w.ClientAccount.GetAccountingByWalletById(w.Ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: node.WalletId})
+		if err != nil {
+			logger.Error.Printf("error obteniendo la cuenta del nodo, error: %v", err)
+			continue
+		}
+		if resAccountNode == nil {
+			logger.Error.Printf("error obteniendo la cuenta del nodo")
+			continue
+		}
+		if resAccountNode.Error {
+			logger.Error.Printf(resAccountNode.Msg)
+			continue
+		}
+
+		resNode, err := w.ClientAccount.SetAmountToAccounting(w.Ctx, &accounting_proto.RequestSetAmountToAccounting{
+			WalletId: node.WalletId,
+			Amount:   resAccountNode.Data.Amount + (feeNodes / float64(len(nodes))),
+			IdUser:   resAccountNode.Data.IdUser,
+		})
+		if err != nil {
+			logger.Error.Printf("error actualizando el dinero del nodo, error: %v", err)
+			continue
+		}
+		if resNode == nil {
+			logger.Error.Printf("error actualizando el dinero del nodo")
+			continue
+		}
+		if resNode.Error {
+			logger.Error.Printf(resNode.Msg)
+			continue
+		}
+	}
 }

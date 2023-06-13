@@ -101,9 +101,9 @@ func (s *psql) getAll() ([]*ValidatorVotes, error) {
 // GetAll consulta todos los registros de la BD
 func (s *psql) getByLotteryID(lotteryID string) ([]*ValidatorVotes, error) {
 	var ms []*ValidatorVotes
-	const psqlGetAll = ` SELECT id , lottery_id, participants_id, hash, vote, created_at, updated_at FROM bc.validator_votes WHERE lottery_id = '%s' `
+	const psqlGetAll = ` SELECT id , lottery_id, participants_id, hash, vote, created_at, updated_at FROM bc.validator_votes WHERE lottery_id = $1 `
 
-	err := s.DB.Select(&ms, fmt.Sprintf(psqlGetAll, lotteryID))
+	err := s.DB.Select(&ms, psqlGetAll, lotteryID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -111,4 +111,17 @@ func (s *psql) getByLotteryID(lotteryID string) ([]*ValidatorVotes, error) {
 		return ms, err
 	}
 	return ms, nil
+}
+
+func (s *psql) getVotesInFavor(id string) (int64, error) {
+	const psqlGetByID = `select sum(case when vt.vote = true then 1 else 0 end) from bc.validator_votes vt WHERE vt.lottery_id = $1 `
+	var votes int64
+	err := s.DB.Get(&votes, psqlGetByID, id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return votes, nil
 }
