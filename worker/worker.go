@@ -13,6 +13,8 @@ import (
 	"blion-worker-consenso/pkg/bk/lotteries"
 	"blion-worker-consenso/pkg/bk/miner_response"
 	"blion-worker-consenso/pkg/bk/participants"
+	"blion-worker-consenso/pkg/cfg"
+	"blion-worker-consenso/pkg/cfg/blockchain"
 	"context"
 	"fmt"
 	"github.com/fatih/color"
@@ -37,6 +39,7 @@ var (
 type Worker struct {
 	SrvBK         *bk.Server
 	SrvAuth       *auth.Server
+	SrvCfg        *cfg.Server
 	ClientMine    mine_proto.MineBlockServicesBlocksClient
 	ClientAuth    auth_proto.AuthServicesUsersClient
 	ClientAccount accounting_proto.AccountingServicesAccountingClient
@@ -44,10 +47,11 @@ type Worker struct {
 	ClientWallet  wallet_proto.WalletServicesWalletClient
 	Block         *mine_proto.DataBlockMine
 	Ctx           context.Context
+	ConfigBk      *blockchain.Blockchain
 }
 
-func NewWorker(srvBk *bk.Server, srvAuth *auth.Server) IWorker {
-	return &Worker{SrvBK: srvBk, SrvAuth: srvAuth}
+func NewWorker(srvBk *bk.Server, srvAuth *auth.Server, srvCfg *cfg.Server) IWorker {
+	return &Worker{SrvBK: srvBk, SrvAuth: srvAuth, SrvCfg: srvCfg}
 }
 
 func (w *Worker) Execute() {
@@ -122,10 +126,9 @@ func (w *Worker) doWork(workItem *lotteries.Lottery) {
 }
 
 func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
-	e := env.NewConfiguration()
 	participantsIds := map[string]string{}
 	lifeLottery := time.Now().Sub(lotteryActive.RegistrationStartDate).Seconds()
-	if int(lifeLottery) > (e.App.SubscriptionTime * 1000) {
+	if int(lifeLottery) > (w.ConfigBk.LotteryTtl * 1000) {
 
 		participantsActive, _, err := w.SrvBK.SrvParticipants.GetParticipantsByLotteryID(lotteryActive.ID)
 		if err != nil {
@@ -133,7 +136,7 @@ func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
 			return err
 		}
 
-		if participantsActive == nil || len(participantsActive) < (e.App.MaxValidator+e.App.MaxMiners) {
+		if participantsActive == nil || len(participantsActive) < (w.ConfigBk.MaxValidators+w.ConfigBk.MaxMiners) {
 			return nil
 		}
 
@@ -149,13 +152,13 @@ func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
 		})
 
 		for _, p := range participantsActive {
-			tickets := int64(math.Round(p.Amount / float64(e.App.TicketsPrice)))
+			tickets := int64(math.Round(p.Amount / float64(w.ConfigBk.TicketsPrice)))
 			for j := int64(0); j < tickets; j++ {
 				participantsIds[p.ID+"/"+strconv.FormatInt(j, 10)] = p.WalletId
 			}
 		}
 
-		GetMinersAndValidators(participantsIds)
+		GetMinersAndValidators(participantsIds, w.ConfigBk.MaxMiners, w.ConfigBk.MaxValidators)
 
 		for key := range minersAccepted {
 			participant := findOneParticipant(participantsActive, strings.Split("/", key)[0])
@@ -189,7 +192,6 @@ func (w *Worker) processLotteryActive(lotteryActive *lotteries.Lottery) error {
 }
 
 func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
-	e := env.NewConfiguration()
 	resHash, _, err := w.SrvBK.SrvMinerResponse.GetMinerResponseRegister(lottery.ID)
 	if err != nil {
 		logger.Error.Printf("error trayendo el hash del minero: %s", err)
@@ -202,7 +204,7 @@ func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
 		return err
 	}
 
-	if len(votes) != e.App.MaxValidator {
+	if len(votes) != w.ConfigBk.MaxValidators {
 		logger.Info.Printf("Se requiere la totalidad de los votos designado en la loteria")
 		return nil
 	}
@@ -228,7 +230,6 @@ func (w *Worker) ProcessLotteryOfMined(lottery *lotteries.Lottery) error {
 
 func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, lotteryMined *lotteries.Lottery, participantsLottery []*participants.Participants) error {
 
-	e := env.NewConfiguration()
 	resMine, err := w.ClientMine.MineBlock(w.Ctx, &mine_proto.RequestMineBlock{
 		Id:         block,
 		Hash:       resHash.Hash,
@@ -275,9 +276,9 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 		return err
 	}
 
-	feeMiner := (feeBlock.Fee * e.App.FeeMine) / 100
-	feeValidators := (feeBlock.Fee * e.App.FeeValidators) / 100
-	feeNodes := (feeBlock.Fee * e.App.FeeNodes) / 100
+	feeMiner := (feeBlock.Fee * float64(w.ConfigBk.FeeMiner)) / 100
+	feeValidators := (feeBlock.Fee * float64(w.ConfigBk.FeeValidator)) / 100
+	feeNodes := (feeBlock.Fee * float64(w.ConfigBk.FeeNode)) / 100
 
 	for _, participant := range participantsLottery {
 		resUnfreeze, err := w.ClientWallet.UnFreezeMoney(w.Ctx, &wallet_proto.RqUnFreezeMoney{WalletId: participant.WalletId, LotteryId: lotteryMined.ID})
@@ -320,7 +321,7 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 			amount := feeMiner
 
 			if participant.TypeCharge == 24 {
-				amount = feeValidators / float64(e.App.MaxValidator)
+				amount = feeValidators / float64(w.ConfigBk.MaxValidators)
 			}
 
 			resReward, err := w.ClientAccount.SetAmountToAccounting(w.Ctx, &accounting_proto.RequestSetAmountToAccounting{
@@ -351,7 +352,7 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 
 	w.ProcessNode(feeNodes)
 
-	resAccountMain, err := w.ClientAccount.GetAccountingByWalletById(w.Ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: e.App.WalletMain})
+	resAccountMain, err := w.ClientAccount.GetAccountingByWalletById(w.Ctx, &accounting_proto.RequestGetAccountingByWalletId{Id: w.ConfigBk.WalletMain})
 	if err != nil {
 		logger.Error.Printf("error obteniendo la cuenta principal, error: %v", err)
 		return err
@@ -367,7 +368,7 @@ func (w *Worker) isApproved(block int64, resHash *miner_response.MinerResponse, 
 
 	fee := feeBlock.Fee - (feeMiner + feeValidators)
 	resMain, err := w.ClientAccount.SetAmountToAccounting(w.Ctx, &accounting_proto.RequestSetAmountToAccounting{
-		WalletId: e.App.WalletMain,
+		WalletId: w.ConfigBk.WalletMain,
 		Amount:   resAccountMain.Data.Amount + fee,
 		IdUser:   resAccountMain.Data.IdUser,
 	})
@@ -660,48 +661,14 @@ func (w *Worker) initGrpcServices() error {
 		return nil
 	}
 
-	return nil
-}
-
-func GetMinersAndValidators(participantsIds map[string]string) {
-	e := env.NewConfiguration()
-
-	numberAccepted := rand.Intn(60-1) + 1
-	counter := 0
-	participantID := ""
-	for key, participant := range participantsIds {
-		if counter == numberAccepted {
-			if len(minersAccepted) == 0 || len(minersAccepted) == len(validatorsAccepted) {
-				minersAccepted[key] = participant
-			} else if len(validatorsAccepted) < len(minersAccepted) {
-				validatorsAccepted[key] = participant
-			}
-			participantID = strings.Split("/", key)[0]
-			delete(participantsIds, key)
-			break
-		}
-		counter++
+	configBk, err := w.SrvCfg.SrvBlockchain.GetLasted()
+	if err != nil {
+		logger.Error.Printf("No se pudo cargar la configuración de la bk, err: ", err)
+		return err
 	}
 
-	for key := range participantsIds {
-		if participantID == strings.Split("/", key)[0] {
-			delete(participantsIds, key)
-		}
-	}
+	w.ConfigBk = configBk
 
-	if len(minersAccepted) == e.App.MaxMiners && len(validatorsAccepted) == e.App.MaxValidator {
-		return
-	}
-
-	GetMinersAndValidators(participantsIds)
-}
-
-func findOneParticipant(participants []*participants.Participants, value string) *participants.Participants {
-	for _, participant := range participants {
-		if participant.ID == value {
-			return participant
-		}
-	}
 	return nil
 }
 
@@ -749,4 +716,45 @@ func (w *Worker) ProcessNode(feeNodes float64) {
 			continue
 		}
 	}
+}
+
+func GetMinersAndValidators(participantsIds map[string]string, maxMiners, maxValidators int) {
+
+	numberAccepted := rand.Intn(60-1) + 1
+	counter := 0
+	participantID := ""
+	for key, participant := range participantsIds {
+		if counter == numberAccepted {
+			if len(minersAccepted) == 0 || len(minersAccepted) == len(validatorsAccepted) {
+				minersAccepted[key] = participant
+			} else if len(validatorsAccepted) < len(minersAccepted) {
+				validatorsAccepted[key] = participant
+			}
+			participantID = strings.Split("/", key)[0]
+			delete(participantsIds, key)
+			break
+		}
+		counter++
+	}
+
+	for key := range participantsIds {
+		if participantID == strings.Split("/", key)[0] {
+			delete(participantsIds, key)
+		}
+	}
+
+	if len(minersAccepted) == maxMiners && len(validatorsAccepted) == maxValidators {
+		return
+	}
+
+	GetMinersAndValidators(participantsIds, maxMiners, maxValidators)
+}
+
+func findOneParticipant(participants []*participants.Participants, value string) *participants.Participants {
+	for _, participant := range participants {
+		if participant.ID == value {
+			return participant
+		}
+	}
+	return nil
 }

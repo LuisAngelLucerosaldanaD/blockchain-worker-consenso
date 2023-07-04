@@ -12,13 +12,13 @@ type NodeWallet struct {
 	WalletId  string     `json:"wallet_id" db:"wallet_id" valid:"required"`
 	Name      string     `json:"name" db:"name" valid:"required"`
 	Ip        string     `json:"ip" db:"ip" valid:"required"`
-	DeletedAt *time.time `json:"deleted_at" db:"deleted_at" valid:"required"`
-	PenaltyAt *time.time `json:"penalty_at" db:"penalty_at" valid:"required"`
+	DeletedAt *time.Time `json:"deleted_at" db:"deleted_at" valid:"required"`
+	PenaltyAt *time.Time `json:"penalty_at" db:"penalty_at" valid:"required"`
 	CreatedAt time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at" db:"updated_at"`
 }
 
-func NewNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.time, penaltyAt *time.time) *NodeWallet {
+func NewNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.Time, penaltyAt *time.Time) *NodeWallet {
 	return &NodeWallet{
 		ID:        id,
 		WalletId:  walletId,

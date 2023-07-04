@@ -21,22 +21,13 @@ type configuration struct {
 }
 
 type App struct {
-	ServiceName       string  `json:"service_name"`
-	PathLog           string  `json:"path_log"`
-	LogReviewInterval int     `json:"log_review_interval"`
-	Language          string  `json:"language"`
-	UserLogin         string  `json:"user_login"`
-	UserPassword      string  `json:"user_password"`
-	TimerInterval     string  `json:"timer_interval"`
-	SubscriptionTime  int     `json:"subscription_time"`
-	MaxMiners         int     `json:"max_miners"`
-	MaxValidator      int     `json:"max_validator"`
-	FeeMine           float64 `json:"fee_mine"`
-	FeeValidators     float64 `json:"fee_validators"`
-	FeeNodes          float64 `json:"fee_nodes"`
-	WalletMain        string  `json:"wallet_main"`
-	TicketsPrice      int     `json:"tickets_price"`
-	WorkerInterval    int     `json:"worker_interval"`
+	ServiceName       string `json:"service_name"`
+	PathLog           string `json:"path_log"`
+	LogReviewInterval int    `json:"log_review_interval"`
+	Language          string `json:"language"`
+	UserLogin         string `json:"user_login"`
+	UserPassword      string `json:"user_password"`
+	WorkerInterval    int    `json:"worker_interval"`
 }
 
 type DB struct {

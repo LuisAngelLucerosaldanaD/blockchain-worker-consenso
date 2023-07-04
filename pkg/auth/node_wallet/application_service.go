@@ -10,8 +10,8 @@ import (
 )
 
 type PortsServerNodeWallet interface {
-	CreateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.time, penaltyAt *time.time) (*NodeWallet, int, error)
-	UpdateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.time, penaltyAt *time.time) (*NodeWallet, int, error)
+	CreateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.Time, penaltyAt *time.Time) (*NodeWallet, int, error)
+	UpdateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.Time, penaltyAt *time.Time) (*NodeWallet, int, error)
 	DeleteNodeWallet(id string) (int, error)
 	GetNodeWalletByID(id string) (*NodeWallet, int, error)
 	GetAllNodeWallet() ([]*NodeWallet, error)
@@ -27,7 +27,7 @@ func NewNodeWalletService(repository ServicesNodeWalletRepository, user *models.
 	return &service{repository: repository, user: user, txID: TxID}
 }
 
-func (s *service) CreateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.time, penaltyAt *time.time) (*NodeWallet, int, error) {
+func (s *service) CreateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.Time, penaltyAt *time.Time) (*NodeWallet, int, error) {
 	m := NewNodeWallet(id, walletId, name, ip, deletedAt, penaltyAt)
 	if valid, err := m.valid(); !valid {
 		logger.Error.Println(s.txID, " - don't meet validations:", err)
@@ -44,7 +44,7 @@ func (s *service) CreateNodeWallet(id string, walletId string, name string, ip s
 	return m, 29, nil
 }
 
-func (s *service) UpdateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.time, penaltyAt *time.time) (*NodeWallet, int, error) {
+func (s *service) UpdateNodeWallet(id string, walletId string, name string, ip string, deletedAt *time.Time, penaltyAt *time.Time) (*NodeWallet, int, error) {
 	m := NewNodeWallet(id, walletId, name, ip, deletedAt, penaltyAt)
 	if valid, err := m.valid(); !valid {
 		logger.Error.Println(s.txID, " - don't meet validations:", err)
