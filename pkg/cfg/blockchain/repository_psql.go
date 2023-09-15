@@ -75,7 +75,7 @@ func (s *psql) getByID(id string) (*Blockchain, error) {
 	mdl := Blockchain{}
 	err := s.DB.Get(&mdl, psqlGetByID, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return &mdl, err
@@ -90,7 +90,7 @@ func (s *psql) getAll() ([]*Blockchain, error) {
 
 	err := s.DB.Select(&ms, psqlGetAll)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return ms, err
@@ -103,7 +103,7 @@ func (s *psql) getLasted() (*Blockchain, error) {
 	mdl := Blockchain{}
 	err := s.DB.Get(&mdl, psqlGetByID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return &mdl, err

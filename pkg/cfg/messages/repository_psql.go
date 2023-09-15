@@ -82,7 +82,7 @@ func (s *psql) getByID(id int) (*Messages, error) {
 	mdl := Messages{}
 	err := s.DB.Get(&mdl, psqlGetByID, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return &mdl, err
@@ -97,7 +97,7 @@ func (s *psql) getAll() ([]*Messages, error) {
 
 	err := s.DB.Select(&ms, psqlGetAll)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return ms, err

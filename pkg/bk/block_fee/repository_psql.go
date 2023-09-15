@@ -2,6 +2,7 @@ package block_fee
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -75,7 +76,7 @@ func (s *psql) getByID(id string) (*BlockFee, error) {
 	mdl := BlockFee{}
 	err := s.DB.Get(&mdl, psqlGetByID, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return &mdl, err
@@ -89,7 +90,7 @@ func (s *psql) getByBlockID(blockId int64) (*BlockFee, error) {
 	mdl := BlockFee{}
 	err := s.DB.Get(&mdl, psqlGetByBlockID, blockId)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return &mdl, err
@@ -104,7 +105,7 @@ func (s *psql) getAll() ([]*BlockFee, error) {
 
 	err := s.DB.Select(&ms, psqlGetAll)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return ms, err

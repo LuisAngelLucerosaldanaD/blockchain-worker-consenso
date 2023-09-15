@@ -9,8 +9,7 @@ import (
 // Model estructura de MinerResponse
 type MinerResponse struct {
 	ID             string    `json:"id" db:"id" valid:"required,uuid"`
-	LotteryId      string    `json:"lottery_id" db:"lottery_id" valid:"required"`
-	ParticipantsId string    `json:"participants_id" db:"participants_id" valid:"required"`
+	ParticipantsId string    `json:"participant_id" db:"participant_id" valid:"required"`
 	Hash           string    `json:"hash" db:"hash" valid:"required"`
 	Status         int       `json:"status" db:"status" valid:"required"`
 	Nonce          int64     `json:"nonce"`
@@ -19,10 +18,9 @@ type MinerResponse struct {
 	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
 }
 
-func NewMinerResponse(id string, lotteryId string, participantsId string, hash string, status int, nonce int64, difficulty int) *MinerResponse {
+func NewMinerResponse(id string, participantsId string, hash string, status int, nonce int64, difficulty int) *MinerResponse {
 	return &MinerResponse{
 		ID:             id,
-		LotteryId:      lotteryId,
 		ParticipantsId: participantsId,
 		Hash:           hash,
 		Status:         status,

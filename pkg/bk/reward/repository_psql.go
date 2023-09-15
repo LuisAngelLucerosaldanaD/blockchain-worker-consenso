@@ -1,7 +1,8 @@
-package node_wallet
+package reward
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,7 +17,7 @@ type psql struct {
 	TxID string
 }
 
-func newNodeWalletPsqlRepository(db *sqlx.DB, user *models.User, txID string) *psql {
+func newRewardsPsqlRepository(db *sqlx.DB, user *models.User, txID string) *psql {
 	return &psql{
 		DB:   db,
 		user: user,
@@ -25,11 +26,11 @@ func newNodeWalletPsqlRepository(db *sqlx.DB, user *models.User, txID string) *p
 }
 
 // Create registra en la BD
-func (s *psql) create(m *NodeWallet) error {
+func (s *psql) create(m *Reward) error {
 	date := time.Now()
 	m.UpdatedAt = date
 	m.CreatedAt = date
-	const psqlInsert = `INSERT INTO auth.node_wallet (id ,wallet_id, name, ip, deleted_at, penalty_at, created_at, updated_at) VALUES (:id ,:wallet_id, :name, :ip, :deleted_at, :penalty_at,:created_at, :updated_at) `
+	const psqlInsert = `INSERT INTO bc.reward (id ,lottery_id, id_wallet, amount, created_at, updated_at) VALUES (:id ,:lottery_id, :id_wallet, :amount,:created_at, :updated_at) `
 	rs, err := s.DB.NamedExec(psqlInsert, &m)
 	if err != nil {
 		return err
@@ -41,10 +42,10 @@ func (s *psql) create(m *NodeWallet) error {
 }
 
 // Update actualiza un registro en la BD
-func (s *psql) update(m *NodeWallet) error {
+func (s *psql) update(m *Reward) error {
 	date := time.Now()
 	m.UpdatedAt = date
-	const psqlUpdate = `UPDATE auth.node_wallet SET wallet_id = :wallet_id, name = :name, ip = :ip, deleted_at = :deleted_at, penalty_at = :penalty_at, updated_at = :updated_at WHERE id = :id `
+	const psqlUpdate = `UPDATE bc.reward SET lottery_id = :lottery_id, id_wallet = :id_wallet, amount = :amount, updated_at = :updated_at WHERE id = :id `
 	rs, err := s.DB.NamedExec(psqlUpdate, &m)
 	if err != nil {
 		return err
@@ -57,8 +58,8 @@ func (s *psql) update(m *NodeWallet) error {
 
 // Delete elimina un registro de la BD
 func (s *psql) delete(id string) error {
-	const psqlDelete = `DELETE FROM auth.node_wallet WHERE id = :id `
-	m := NodeWallet{ID: id}
+	const psqlDelete = `DELETE FROM bc.reward WHERE id = :id `
+	m := Reward{ID: id}
 	rs, err := s.DB.NamedExec(psqlDelete, &m)
 	if err != nil {
 		return err
@@ -70,9 +71,9 @@ func (s *psql) delete(id string) error {
 }
 
 // GetByID consulta un registro por su ID
-func (s *psql) getByID(id string) (*NodeWallet, error) {
-	const psqlGetByID = `SELECT id , wallet_id, name, ip, deleted_at, penalty_at, created_at, updated_at FROM auth.node_wallet WHERE id = $1 `
-	mdl := NodeWallet{}
+func (s *psql) getByID(id string) (*Reward, error) {
+	const psqlGetByID = `SELECT id , lottery_id, id_wallet, amount, created_at, updated_at FROM bc.reward WHERE id = $1 `
+	mdl := Reward{}
 	err := s.DB.Get(&mdl, psqlGetByID, id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -84,9 +85,9 @@ func (s *psql) getByID(id string) (*NodeWallet, error) {
 }
 
 // GetAll consulta todos los registros de la BD
-func (s *psql) getAll() ([]*NodeWallet, error) {
-	var ms []*NodeWallet
-	const psqlGetAll = ` SELECT id , wallet_id, name, ip, deleted_at, penalty_at, created_at, updated_at FROM auth.node_wallet `
+func (s *psql) getAll() ([]*Reward, error) {
+	var ms []*Reward
+	const psqlGetAll = ` SELECT id , lottery_id, id_wallet, amount, created_at, updated_at FROM bc.reward `
 
 	err := s.DB.Select(&ms, psqlGetAll)
 	if err != nil {

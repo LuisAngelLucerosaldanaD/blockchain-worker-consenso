@@ -9,8 +9,8 @@ import (
 )
 
 type PortsServerMinerResponse interface {
-	CreateMinerResponse(id string, lotteryId string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error)
-	UpdateMinerResponse(id string, lotteryId string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error)
+	CreateMinerResponse(id string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error)
+	UpdateMinerResponse(id string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error)
 	DeleteMinerResponse(id string) (int, error)
 	GetMinerResponseByID(id string) (*MinerResponse, int, error)
 	GetAllMinerResponse() ([]*MinerResponse, error)
@@ -27,8 +27,8 @@ func NewMinerResponseService(repository ServicesMinerResponseRepository, user *m
 	return &service{repository: repository, user: user, txID: TxID}
 }
 
-func (s *service) CreateMinerResponse(id string, lotteryId string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error) {
-	m := NewMinerResponse(id, lotteryId, participantsId, hash, status, nonce, difficulty)
+func (s *service) CreateMinerResponse(id string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error) {
+	m := NewMinerResponse(id, participantsId, hash, status, nonce, difficulty)
 	if valid, err := m.valid(); !valid {
 		logger.Error.Println(s.txID, " - don't meet validations:", err)
 		return m, 15, err
@@ -44,8 +44,8 @@ func (s *service) CreateMinerResponse(id string, lotteryId string, participantsI
 	return m, 29, nil
 }
 
-func (s *service) UpdateMinerResponse(id string, lotteryId string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error) {
-	m := NewMinerResponse(id, lotteryId, participantsId, hash, status, nonce, difficulty)
+func (s *service) UpdateMinerResponse(id string, participantsId string, hash string, status int, nonce int64, difficulty int) (*MinerResponse, int, error) {
+	m := NewMinerResponse(id, participantsId, hash, status, nonce, difficulty)
 	if valid, err := m.valid(); !valid {
 		logger.Error.Println(s.txID, " - don't meet validations:", err)
 		return m, 15, err
